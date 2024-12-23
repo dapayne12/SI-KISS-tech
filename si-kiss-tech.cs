@@ -59,6 +59,8 @@ string error = null;
 List<IMyAssembler> assemblers = new List<IMyAssembler>();
 List<IMyInventory> inventories = new List<IMyInventory>();
 
+Stack<MyTuple<IMyAssembler, MyDefinitionId>> jobs = new Stack<MyTuple<IMyAssembler, MyDefinitionId>>();
+
 public Program()
 {
     GridTerminalSystem.GetBlocksOfType(assemblers, block => block.IsSameConstructAs(Me));
@@ -80,6 +82,13 @@ public void Main()
 {
     if (error != null) {
         Echo(error);
+        return;
+    }
+
+    if (jobs.Count > 0) {
+        MyTuple<IMyAssembler, MyDefinitionId> job = jobs.Pop();
+        AddToQueue(job.Item1, job.Item2);
+        Echo(currentEcho);
         return;
     }
 
@@ -122,14 +131,18 @@ public void Main()
 }
 
 public void MakeTech(MyDefinitionId techDef) {
-    List<MyTuple<MyItemType, MyFixedPoint>> recipie = RECIPIES[techDef];
     foreach (IMyAssembler assembler in assemblers) {
         if (assembler.IsQueueEmpty) {
-            currentEcho += "Making " + techDef.ToString().Split('/')[1] + " in " + assembler.CustomName + "\n";
-            MoveItems(recipie, assembler.InputInventory);
-            assembler.AddQueueItem(techDef, ASSEMBLE_BLOCK_SIZE);
+            jobs.Push(new MyTuple<IMyAssembler, MyDefinitionId>(assembler, techDef));
         }
     }
+}
+
+public void AddToQueue(IMyAssembler assembler, MyDefinitionId techDef) {
+    List<MyTuple<MyItemType, MyFixedPoint>> recipie = RECIPIES[techDef];
+    currentEcho += "Making " + techDef.ToString().Split('/')[1] + " in " + assembler.CustomName + "\n";
+    MoveItems(recipie, assembler.InputInventory);
+    assembler.AddQueueItem(techDef, ASSEMBLE_BLOCK_SIZE);
 }
 
 public void MoveItems(List<MyTuple<MyItemType, MyFixedPoint>> recipie, IMyInventory destinationInventory) {
