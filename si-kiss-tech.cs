@@ -5,8 +5,11 @@ static MyFixedPoint ASSEMBLE_BLOCK_SIZE = 100;
 // 5 lower tier tech to make the next highest tier, 10 assemblers.
 static MyFixedPoint MINIMUM_TECH = ASSEMBLE_BLOCK_SIZE * 5 * 10;
 
-static List<IMyAssembler> assemblers = new List<IMyAssembler>();
-static List<IMyInventory> inventories = new List<IMyInventory>();
+// How many minutes to wait between each run.
+int MINUTES_BETWEEN_RUN = 1;
+
+List<IMyAssembler> assemblers = new List<IMyAssembler>();
+List<IMyInventory> inventories = new List<IMyInventory>();
 
 MyItemType tech2 = new MyItemType("MyObjectBuilder_Component", "Tech2x");
 MyDefinitionId tech2def = MyDefinitionId.Parse("MyObjectBuilder_BlueprintDefinition/Tech2x");
@@ -18,7 +21,7 @@ MyDefinitionId tech8def = MyDefinitionId.Parse("MyObjectBuilder_BlueprintDefinit
 
 DateTime nextRunTime = DateTime.UtcNow;
 
-String currentEcho = "";
+string currentEcho = "";
 
 public Program()
 {
@@ -45,7 +48,7 @@ public void Main()
         return;
     }
 
-    nextRunTime = now.AddMinutes(1);
+    nextRunTime = now.AddMinutes(MINUTES_BETWEEN_RUN);
 
     currentEcho = DateTime.UtcNow.ToString() + "\n";
 
