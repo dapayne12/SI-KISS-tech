@@ -12,9 +12,10 @@ static readonly MyFixedPoint ASSEMBLE_BLOCK_SIZE = 100;
 static readonly MyFixedPoint MINIMUM_TECH = ASSEMBLE_BLOCK_SIZE * 5 * 10;
 
 /// <summary>
-/// How many minutes to wait between each run.
+/// How many minutes to wait until counting how much tech2x and tech4x
+/// is in inventory.
 /// </summary>
-static readonly int MINUTES_BETWEEN_RUN = 1;
+static readonly int MINUTES_BETWEEN_RECOUNT = 1;
 
 ///////////////////////////////////////////////////
 // Component types and definitions. Do not modify.
@@ -76,7 +77,7 @@ static readonly Dictionary<MyDefinitionId, List<MyTuple<MyItemType, MyFixedPoint
 /// The script only runs every MINUTES_BETWEEN_RUN. This will be set to
 /// the time the script will run next.
 /// </summary>
-DateTime nextRunTime = DateTime.UtcNow;
+DateTime nextRecount = DateTime.UtcNow;
 
 /// <summary>
 /// Every tick this is echoed to the screen. It is reset once each
@@ -108,6 +109,11 @@ Stack<MyTuple<IMyAssembler, MyDefinitionId>> jobs =
     new Stack<MyTuple<IMyAssembler, MyDefinitionId>>();
 
 /// <summary>
+/// The current tech to produce. Set every MINUTES_BETWEEN_RECOUNT.
+/// </summary>
+MyDefinitionId currentTech = TECH2_DEF;
+
+/// <summary>
 /// Runs once on startup.
 /// </summary>
 public Program() {
@@ -129,6 +135,18 @@ public Program() {
 
 /// <summary>
 /// Runs every 100 ticks.
+///
+/// Does one, and *only* one of the following:
+///
+/// 1) Does a recount of all the tech2x and tech4x in inventory and
+///    sets currentTech.
+///
+/// or
+///
+/// 2) Finds an assembler with an empty queue. If one is found queues
+///    up 100 instances of currentTech. Only one empty assembler is
+///    handled per-update. Additional assemblers will be handled on
+///    subsequent updates.
 /// </summary>
 public void Main() {
     // Do not run if the scirpt has encountered an error.
@@ -137,41 +155,38 @@ public void Main() {
         return;
     }
 
-    // If there are assembler jobs, run a single job and then yield.
-    if (jobs.Count > 0) {
-        MyTuple<IMyAssembler, MyDefinitionId> job = jobs.Pop();
-        AddToQueue(job.Item1, job.Item2);
-        Echo(currentEcho);
-        return;
-    }
-
-    // If there are no jobs, wait until the next runtime.
     DateTime now = DateTime.UtcNow;
-    if (now < nextRunTime) {
+    if (now >= nextRecount) {
+        // Recount is intense, only count tech once every
+        // MINUTES_BETWEEN_RECOUNT.
+        nextRecount = now.AddMinutes(MINUTES_BETWEEN_RECOUNT);
+
+        RecountTech();
         Echo(currentEcho);
         return;
     }
 
-    ///////////////////////////////////////////////////////////////////
-    // The rest of this method is intended to run aproximately once
-    // every MINUTES_BETWEEN_RUN. It acomplishes this by setting
-    // nextRunTime to MINUTES_BETWEEN_RUN from now.
-    //
-    // The rest of this method does the following:
-    //  1) Count the amount of tech2x and tech4x in all of the
-    //     inventories. Use this to determine what kind of tech to
-    //     produce next.
-    //  2) Find any assemblers with an empty queue.
-    //  3) Create jobs in the jobs Stack to add the items to the queue.
-    //
-    // No items is acutally added to assembler queues in the remaining
-    // part of this method. Adding items to the queue is handled in
-    // subsequent ticks by Poping jobs off the jobs queue.
-    ///////////////////////////////////////////////////////////////////
+    foreach (IMyAssembler assembler in assemblers) {
+        if (assembler.IsQueueEmpty) {
+            AddToQueue(assembler, currentTech);
+            // Only allow one queue to be processed per tick. If there
+            // are more empty queues they will be filled on the next
+            // tick.
+            Echo(currentEcho);
+            return;
+        }
+    }
 
-    // Set the next runitme.
-    nextRunTime = now.AddMinutes(MINUTES_BETWEEN_RUN);
+    Echo(currentEcho);
+}
 
+/// <summary>
+/// Runs aproximately once every MINUTES_BETWEEN_RUN.
+///
+/// Counts the amount of tech2x and tech4x in all inventories. Sets
+/// currentTech to the tech that we should currently be producing.
+/// </summary>
+public void RecountTech() {
     // Reset the currentEcho string, so we have fresh output. Add a
     // timestamp so it's possible to monitor the script progress.
     currentEcho = $"{DateTime.UtcNow}\n";
@@ -182,16 +197,14 @@ public void Main() {
 
     if (tech2Count < MINIMUM_TECH) {
         currentEcho += $"Making tech2, current count: {tech2Count}, minimum count: {MINIMUM_TECH}\n\n";
-        CreateAssemblyJobs(TECH2_DEF);
+        currentTech = TECH2_DEF;
     } else if (tech4Count < MINIMUM_TECH) {
         currentEcho += $"Making tech4, current count: {tech4Count}, minimum count: {MINIMUM_TECH}\n\n";
-        CreateAssemblyJobs(TECH4_DEF);
+        currentTech = TECH4_DEF;
     } else {
         currentEcho += "Making tech8\n\n";
-        CreateAssemblyJobs(TECH8_DEF);
+        currentTech = TECH8_DEF;
     }
-
-    Echo(currentEcho);
 }
 
 /// <summary>
@@ -215,19 +228,6 @@ public MyTuple<MyFixedPoint, MyFixedPoint> GetTechCount() {
     }
 
     return new MyTuple<MyFixedPoint, MyFixedPoint>(tech2Count, tech4Count);
-}
-
-/// <summary>
-/// Create assombly jobs and add them to the jobs queue.
-/// </summary>
-/// <param name="techDef">The type of tech to create assembly jobs
-/// for.</param>
-public void CreateAssemblyJobs(MyDefinitionId techDef) {
-    foreach (IMyAssembler assembler in assemblers) {
-        if (assembler.IsQueueEmpty) {
-            jobs.Push(new MyTuple<IMyAssembler, MyDefinitionId>(assembler, techDef));
-        }
-    }
 }
 
 /// <summary>
