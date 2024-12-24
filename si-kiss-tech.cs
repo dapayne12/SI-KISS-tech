@@ -244,6 +244,7 @@ public MyTuple<MyFixedPoint, MyFixedPoint> GetTechCount() {
 public void AddToQueue(IMyAssembler assembler, MyDefinitionId techDef) {
     List<MyTuple<MyItemType, MyFixedPoint>> recipie = RECIPIES[techDef];
     currentEcho += $"Making {techDef.ToString().Split('/')[1]} in {assembler.CustomName}\n";
+    assembler.Mode = MyAssemblerMode.Assembly;
     MoveItems(recipie, assembler.InputInventory);
     assembler.AddQueueItem(techDef, ASSEMBLE_BLOCK_SIZE);
 }
