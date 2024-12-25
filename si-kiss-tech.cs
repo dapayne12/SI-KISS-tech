@@ -117,7 +117,15 @@ MyDefinitionId currentTech = TECH2_DEF;
 /// Runs once on startup.
 /// </summary>
 public Program() {
-    GridTerminalSystem.GetBlocksOfType(assemblers, block => block.IsSameConstructAs(Me));
+    List<IMyAssembler> allAssemblers = new List<IMyAssembler>();
+    GridTerminalSystem.GetBlocksOfType(allAssemblers, block => block.IsSameConstructAs(Me));
+    foreach (IMyAssembler assembler in allAssemblers) {
+        // Skip any survival kits.
+        if (assembler.BlockDefinition.SubtypeName.Contains("SurvivalKit")) {
+            continue;
+        }
+        assemblers.Add(assembler);
+    }
 
     List<IMyCargoContainer> cargoContainers = new List<IMyCargoContainer>();
     GridTerminalSystem.GetBlocksOfType(cargoContainers, block => block.IsSameConstructAs(Me));
@@ -245,6 +253,7 @@ public void AddToQueue(IMyAssembler assembler, MyDefinitionId techDef) {
     List<MyTuple<MyItemType, MyFixedPoint>> recipie = RECIPIES[techDef];
     currentEcho += $"Making {techDef.ToString().Split('/')[1]} in {assembler.CustomName}\n";
     assembler.Mode = MyAssemblerMode.Assembly;
+    assembler.Repeating = false;
     MoveItems(recipie, assembler.InputInventory);
     assembler.AddQueueItem(techDef, ASSEMBLE_BLOCK_SIZE);
 }
