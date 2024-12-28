@@ -1,4 +1,10 @@
 /// <summary>
+/// The output will be sent to the first LCD that contains this string
+/// in its name.
+/// </summary>
+static readonly string OUTPUT_LCD_KEYWORD = "[KISS-tech]";
+
+/// <summary>
 /// This much tech will be assembled in each assembler at a time.
 /// </summary>
 static readonly MyFixedPoint ASSEMBLE_BLOCK_SIZE = 100;
@@ -17,6 +23,13 @@ static readonly MyFixedPoint MINIMUM_TECH = ASSEMBLE_BLOCK_SIZE * 5 * 10;
 /// </summary>
 static readonly int MINUTES_BETWEEN_RECOUNT = 1;
 
+/// <summary>
+/// Refresh assembler status every REFRESH_ASSEMBLER_UPDATE_COUNT
+/// updates. One assembler status is updated every this amount of
+/// updates.
+/// </summary>
+static readonly int REFRESH_ASSEMBLER_UPDATE_COUNT = 5;
+
 ///////////////////////////////////////////////////
 // Component types and definitions. Do not modify.
 ///////////////////////////////////////////////////
@@ -27,6 +40,7 @@ static readonly MyDefinitionId TECH2_DEF = MyDefinitionId.Parse("MyObjectBuilder
 static readonly MyItemType TECH4 = new MyItemType("MyObjectBuilder_Component", "Tech4x");
 static readonly MyDefinitionId TECH4_DEF = MyDefinitionId.Parse("MyObjectBuilder_BlueprintDefinition/Tech4x");
 
+static readonly MyItemType TECH8 = new MyItemType("MyObjectBuilder_Component", "Tech8x");
 static readonly MyDefinitionId TECH8_DEF = MyDefinitionId.Parse("MyObjectBuilder_BlueprintDefinition/Tech8x");
 
 static readonly MyItemType FE = new MyItemType("MyObjectBuilder_Ingot", "Iron");
@@ -83,7 +97,7 @@ DateTime nextRecount = DateTime.UtcNow;
 /// Every tick this is echoed to the screen. It is reset once each
 /// MINUTES_BETWEEN_RUN.
 /// </summary>
-string currentEcho = "";
+string outputText = "";
 
 /// <summary>
 /// Set if an unrecoverable error was encountered. Setting this will
@@ -114,18 +128,59 @@ Stack<MyTuple<IMyAssembler, MyDefinitionId>> jobs =
 MyDefinitionId currentTech = TECH2_DEF;
 
 /// <summary>
+/// The output LCD, if it exists.
+/// </summary>
+IMyTextPanel outputPanel = null;
+
+/// <summary>
+/// Keeps track if the outputText has been updated since the
+/// outputPanel text was last set.
+/// </summary>
+bool outputTextUpdated = false;
+
+/// <summary>
+/// The text status of each assembler.
+/// </summary>
+List<string> assemblerStatus = new List<string>();
+
+/// <summary>
+/// The name of the assembler in output.
+/// </summary>
+List<string> assemblerNames = new List<string>();
+
+/// <summary>
+/// The amount of updates since an assembler status was updated.
+/// </summary>
+int refreshAssemblerStatusUpdateCounter = 0;
+
+/// <summary>
+/// The next assembler the status will be updated for.
+/// </summary>
+int assemblerStatusRefreshIndex = 0;
+
+/// <summary>
+/// The the status of all assemblers.
+/// </summary>
+string assemblerStatusOutput = "";
+
+/// <summary>
 /// Runs once on startup.
 /// </summary>
 public Program() {
     List<IMyAssembler> allAssemblers = new List<IMyAssembler>();
     GridTerminalSystem.GetBlocksOfType(allAssemblers, block => block.IsSameConstructAs(Me));
+    allAssemblers.Sort(CompareAssemblers);
     foreach (IMyAssembler assembler in allAssemblers) {
         // Skip any survival kits.
         if (assembler.BlockDefinition.SubtypeName.Contains("SurvivalKit")) {
             continue;
         }
         assemblers.Add(assembler);
+        string assemblerOutputName = $"#{GetAssemblerOutputName(assembler.CustomName)}";
+        assemblerNames.Add(assemblerOutputName);
+        assemblerStatus.Add($"{assemblerOutputName}: <please wait...>\n");
     }
+    assemblerStatusOutput = string.Join("", assemblerStatus);
 
     List<IMyCargoContainer> cargoContainers = new List<IMyCargoContainer>();
     GridTerminalSystem.GetBlocksOfType(cargoContainers, block => block.IsSameConstructAs(Me));
@@ -135,6 +190,16 @@ public Program() {
     }
     foreach (IMyAssembler assembler in assemblers) {
         inventories.Add(assembler.OutputInventory);
+    }
+
+    List<IMyTextPanel> textPanels = new List<IMyTextPanel>();
+    GridTerminalSystem.GetBlocksOfType(textPanels, block => block.IsSameConstructAs(Me));
+    foreach (IMyTextPanel textPanel in textPanels) {
+        if (textPanel.CustomName.Contains(OUTPUT_LCD_KEYWORD)) {
+            outputPanel = textPanel;
+            outputPanel.ContentType = ContentType.TEXT_AND_IMAGE;
+            break;
+        }
     }
 
     // Main will be called every 100 ticks.
@@ -159,7 +224,7 @@ public Program() {
 public void Main() {
     // Do not run if the scirpt has encountered an error.
     if (error != null) {
-        Echo(error);
+        Output(true);
         return;
     }
 
@@ -169,23 +234,23 @@ public void Main() {
         // MINUTES_BETWEEN_RECOUNT.
         nextRecount = now.AddMinutes(MINUTES_BETWEEN_RECOUNT);
 
-        RecountTech();
-        Echo(currentEcho);
-        return;
-    }
-
-    foreach (IMyAssembler assembler in assemblers) {
-        if (assembler.IsQueueEmpty) {
-            AddToQueue(assembler, currentTech);
-            // Only allow one queue to be processed per tick. If there
-            // are more empty queues they will be filled on the next
-            // tick.
-            Echo(currentEcho);
-            return;
+        CountTech();
+    } if (++refreshAssemblerStatusUpdateCounter >= REFRESH_ASSEMBLER_UPDATE_COUNT) {
+        RefreshAssemblerStatus();
+        refreshAssemblerStatusUpdateCounter = 0;
+    } else {
+        foreach (IMyAssembler assembler in assemblers) {
+            if (assembler.IsQueueEmpty) {
+                AddToQueue(assembler, currentTech);
+                // Only allow one queue to be processed per tick. If there
+                // are more empty queues they will be filled on the next
+                // tick.
+                break;
+            }
         }
     }
 
-    Echo(currentEcho);
+    Output();
 }
 
 /// <summary>
@@ -194,35 +259,44 @@ public void Main() {
 /// Counts the amount of tech2x and tech4x in all inventories. Sets
 /// currentTech to the tech that we should currently be producing.
 /// </summary>
-public void RecountTech() {
-    // Reset the currentEcho string, so we have fresh output. Add a
+public void CountTech() {
+    // Reset the outputText string, so we have fresh output. Add a
     // timestamp so it's possible to monitor the script progress.
-    currentEcho = $"{DateTime.UtcNow}\n";
+    outputText = $"{DateTime.UtcNow}\n\n";
 
-    MyTuple<MyFixedPoint, MyFixedPoint> techCount = GetTechCount();
+    MyTuple<MyFixedPoint, MyFixedPoint, MyFixedPoint> techCount = GetTechCount();
     MyFixedPoint tech2Count = techCount.Item1;
     MyFixedPoint tech4Count = techCount.Item2;
+    MyFixedPoint tech8Count = techCount.Item3;
+
+    outputText += $"Tech2x count: {tech2Count}\n";
+    outputText += $"Tech4x count: {tech4Count}\n";
+    outputText += $"Tech8x count: {tech8Count}\n\n";
 
     if (tech2Count < MINIMUM_TECH) {
-        currentEcho += $"Making tech2, current count: {tech2Count}, minimum count: {MINIMUM_TECH}\n\n";
+        outputText += $"Making tech2, minimum count: {MINIMUM_TECH}\n\n";
         currentTech = TECH2_DEF;
     } else if (tech4Count < MINIMUM_TECH) {
-        currentEcho += $"Making tech4, current count: {tech4Count}, minimum count: {MINIMUM_TECH}\n\n";
+        outputText += $"Making tech4, minimum count: {MINIMUM_TECH}\n\n";
         currentTech = TECH4_DEF;
     } else {
-        currentEcho += "Making tech8\n\n";
+        outputText += "Making tech8\n\n";
         currentTech = TECH8_DEF;
     }
+
+    outputTextUpdated = true;
 }
 
 /// <summary>
 /// Get the tech2x and tech4x counts.
 /// </summary>
-/// <returns>The Item1 is the amount of tech2x in inventory, Item2 is
-/// the amount of tech4x in inventory.</returns>
-public MyTuple<MyFixedPoint, MyFixedPoint> GetTechCount() {
+/// <returns>Item1 is the amount of tech2x in inventory, Item2 is the
+/// amount of tech4x in inventory, Item3 is the amount of tech8x in
+/// inventory.</returns>
+public MyTuple<MyFixedPoint, MyFixedPoint, MyFixedPoint> GetTechCount() {
     MyFixedPoint tech2Count = 0;
     MyFixedPoint tech4Count = 0;
+    MyFixedPoint tech8Count = 0;
     foreach (IMyInventory inventory in inventories) {
         List<MyInventoryItem> items = new List<MyInventoryItem>();
         inventory.GetItems(items);
@@ -231,11 +305,13 @@ public MyTuple<MyFixedPoint, MyFixedPoint> GetTechCount() {
                 tech2Count += item.Amount;
             } else if (item.Type == TECH4) {
                 tech4Count += item.Amount;
+            } else if (item.Type == TECH8) {
+                tech8Count += item.Amount;
             }
         }
     }
 
-    return new MyTuple<MyFixedPoint, MyFixedPoint>(tech2Count, tech4Count);
+    return new MyTuple<MyFixedPoint, MyFixedPoint, MyFixedPoint>(tech2Count, tech4Count, tech8Count);
 }
 
 /// <summary>
@@ -251,7 +327,6 @@ public MyTuple<MyFixedPoint, MyFixedPoint> GetTechCount() {
 /// <param name="techDef">The tech to add to the queue.</param>
 public void AddToQueue(IMyAssembler assembler, MyDefinitionId techDef) {
     List<MyTuple<MyItemType, MyFixedPoint>> recipie = RECIPIES[techDef];
-    currentEcho += $"Making {techDef.ToString().Split('/')[1]} in {assembler.CustomName}\n";
     assembler.Mode = MyAssemblerMode.Assembly;
     assembler.Repeating = false;
     MoveItems(recipie, assembler.InputInventory);
@@ -355,4 +430,93 @@ public IMyInventory GetBestInventory(MyItemType itemType) {
 
     bestInventoryForItemType[itemType] = bestInventory;
     return bestInventory;
+}
+
+/// <summary>
+/// Echo the output string. If outputPanel is set then set the text to
+/// the provided output.
+/// </summary>
+/// <param name="error">Ignore outputTextUpdated and display the error
+/// message.</param>
+public void Output(bool error = false) {
+    if (error || (outputPanel != null && outputTextUpdated)) {
+        string output = error ? this.error : $"{outputText}Assembler Queues:\n{assemblerStatusOutput}";
+        Echo(output);
+        outputPanel.WriteText(output);
+        outputTextUpdated = false;
+    }
+}
+
+/// <summary>
+/// Refresh the assembler status for a single assembler.
+/// </summary>
+public void RefreshAssemblerStatus() {
+    IMyAssembler assembler = assemblers[assemblerStatusRefreshIndex];
+
+    string status = $"{assemblerNames[assemblerStatusRefreshIndex]}: ";
+
+    List<MyProductionItem> items = new List<MyProductionItem>();
+    assembler.GetQueue(items);
+    bool first = true;
+    foreach (MyProductionItem item in items) {
+        if (first) {
+            first = false;
+        } else {
+            status += ", ";
+        }
+
+        status += $"{item.BlueprintId.SubtypeName} {item.Amount}";
+    }
+
+    status += "\n";
+    assemblerStatus[assemblerStatusRefreshIndex] = status;
+
+    assemblerStatusOutput = string.Join("", assemblerStatus);
+    outputTextUpdated = true;
+
+    if (++assemblerStatusRefreshIndex == assemblers.Count) {
+        assemblerStatusRefreshIndex = 0;
+    }
+}
+
+/// <summary>
+/// Parse a number out of an assembler name, and return that number as
+/// a string.
+/// </summary>
+/// <param name="assemblerName">The assembler name.</param>
+/// <returns>A number from the assembler name. If no number was found
+/// then the whole assembler name is returned.</returns>
+public string GetAssemblerOutputName(string assemblerName) {
+    // This seems a little faster than regex.
+    List<char> numbers = new List<char>();
+    foreach (char letter in assemblerName.ToCharArray()) {
+        if (letter >= '0' && letter <= '9') {
+            numbers.Add(letter);
+        }
+    }
+    if (numbers.Count > 0) {
+        return new string(numbers.ToArray());
+    } else {
+        return assemblerName;
+    }
+}
+
+/// <summary>
+/// A Comparor that compares two assemblers using their custom names.
+/// </summary>
+/// <param name="a">The first assembler.</param>
+/// <param name="b">The second assembler.</param>
+/// <returns>The result of the comparison.</returns>
+public int CompareAssemblers(IMyAssembler a, IMyAssembler b) {
+    try {
+        string aName = GetAssemblerOutputName(a.CustomName);
+        int aInt = int.Parse(aName);
+
+        string bName = GetAssemblerOutputName(b.CustomName);
+        int bInt = int.Parse(bName);
+
+        return aInt.CompareTo(bInt);
+    } catch {
+        return string.Compare(a.CustomName, b.CustomName);
+    }
 }
