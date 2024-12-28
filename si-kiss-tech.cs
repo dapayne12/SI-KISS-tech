@@ -239,14 +239,18 @@ public void Main() {
         RefreshAssemblerStatus();
         refreshAssemblerStatusUpdateCounter = 0;
     } else {
-        foreach (IMyAssembler assembler in assemblers) {
-            if (assembler.IsQueueEmpty) {
-                AddToQueue(assembler, currentTech);
-                // Only allow one queue to be processed per tick. If there
-                // are more empty queues they will be filled on the next
-                // tick.
-                break;
+        try {
+            foreach (IMyAssembler assembler in assemblers) {
+                if (assembler.IsQueueEmpty) {
+                    AddToQueue(assembler, currentTech);
+                    // Only allow one queue to be processed per tick. If there
+                    // are more empty queues they will be filled on the next
+                    // tick.
+                    break;
+                }
             }
+        } catch (OutOfResourceException) {
+            // Do nothing, the error string is set.
         }
     }
 
@@ -424,8 +428,9 @@ public IMyInventory GetBestInventory(MyItemType itemType) {
     }
 
     if (bestInventory == null) {
-        error = $"No more {itemType.SubtypeId} found!";
-        throw new Exception(error);
+        error = $"No more {itemType.SubtypeId} found!\n" +
+            $"Provide {itemType.SubtypeId} then recompile script.\n";
+        throw new OutOfResourceException(error);
     }
 
     bestInventoryForItemType[itemType] = bestInventory;
@@ -519,4 +524,8 @@ public int CompareAssemblers(IMyAssembler a, IMyAssembler b) {
     } catch {
         return string.Compare(a.CustomName, b.CustomName);
     }
+}
+
+public class OutOfResourceException : Exception {
+    public OutOfResourceException(string message) : base(message) {}
 }
